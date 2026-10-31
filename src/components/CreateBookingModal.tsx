@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { useHomestay } from '../context/HomestayContext';
 import { useToast } from '../context/ToastContext';
-import { formatVND, calculateNights, calculateDeposit, formatDate, validateCustomerFull, useLockScroll } from '../utils/helpers';
+import { formatVND, calculateNights, calculateDeposit, formatDate, validateCustomerFull, useLockScroll, getTodayStr } from '../utils/helpers';
 import { Phong } from '../types';
 
 interface CreateBookingModalProps {
@@ -16,6 +16,9 @@ interface CreateBookingModalProps {
   initialCheckOut?: string;
   initialGuests?: number;
   initialRoomCode?: string;
+  initialCustomerId?: string;
+  initialSpecialRequest?: string;
+  initialMaDonGoc?: string;
   onClose: () => void;
   onSuccess: (maDon: string) => void;
 }
@@ -25,6 +28,9 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({
   initialCheckOut,
   initialGuests = 2,
   initialRoomCode,
+  initialCustomerId,
+  initialSpecialRequest,
+  initialMaDonGoc,
   onClose,
   onSuccess,
 }) => {
@@ -37,11 +43,31 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({
   } = useHomestay();
   const { showToast } = useToast();
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  const todayStr = getTodayStr();
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
 
-  const [checkIn, setCheckIn] = useState(initialCheckIn || todayStr);
-  const [checkOut, setCheckOut] = useState(initialCheckOut || tomorrowStr);
+  // Khởi tạo ngày nhận / trả phòng: nếu ngày từ đơn cũ ở quá khứ, tự động điều chỉnh về từ hôm nay
+  const computeInitialDates = () => {
+    let start = initialCheckIn ? initialCheckIn.slice(0, 10) : todayStr;
+    let end = initialCheckOut ? initialCheckOut.slice(0, 10) : tomorrowStr;
+    let wasAdjusted = false;
+
+    if (start < todayStr) {
+      start = todayStr;
+      wasAdjusted = true;
+      if (end <= start) {
+        end = tomorrowStr;
+      }
+    }
+    return { start, end, wasAdjusted };
+  };
+
+  const [initialDateCalc] = useState(computeInitialDates);
+  const [checkIn, setCheckIn] = useState(initialDateCalc.start);
+  const [checkOut, setCheckOut] = useState(initialDateCalc.end);
+  const [datesAdjustedNotice] = useState(initialDateCalc.wasAdjusted);
   const [guestCount, setGuestCount] = useState(initialGuests);
   const [selectedRoomCode, setSelectedRoomCode] = useState(initialRoomCode || '');
 
@@ -64,7 +90,7 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({
 
   // Customer mode: 'existing' | 'new'
   const [customerMode, setCustomerMode] = useState<'existing' | 'new'>('existing');
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState(initialCustomerId || '');
   const [customerSearch, setCustomerSearch] = useState('');
 
   // New Customer Form (HoTen, SoDienThoai, CCCD 12 số, Email, DiaChi đều bắt buộc)
@@ -76,7 +102,7 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({
   const [newCustomerNote, setNewCustomerNote] = useState('');
 
   // Special request
-  const [specialRequest, setSpecialRequest] = useState('');
+  const [specialRequest, setSpecialRequest] = useState(initialSpecialRequest || '');
 
   // Error message & field errors
   const [errorMessage, setErrorMessage] = useState('');
@@ -188,6 +214,7 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({
       ngayTraPhong: checkOut,
       soKhach: guestCount,
       yeuCauDacBiet: specialRequest.trim() || undefined,
+      maDonGoc: initialMaDonGoc,
     };
 
     const res = createBooking(payload);
@@ -209,7 +236,7 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({
           <div>
             <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
               <Calendar className="w-5 h-5 text-blue-600" />
-              TẠO ĐƠN ĐẶT PHÒNG MỚI
+              {initialMaDonGoc ? `TẠO ĐƠN MỚI TỪ ĐƠN ${initialMaDonGoc}` : 'TẠO ĐƠN ĐẶT PHÒNG MỚI'}
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Hệ thống tự động kiểm tra tình trạng phòng và tính cọc 30%
@@ -226,6 +253,23 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({
 
         {/* Phần thân cuộn độc lập bên dưới, không bao giờ lộ chữ đằng sau header */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4 overscroll-contain">
+          {initialMaDonGoc && (
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-1">
+              <div className="flex items-center gap-2 font-bold text-amber-950">
+                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>Tạo đơn mới kế thừa từ đơn đã hủy {initialMaDonGoc}</span>
+              </div>
+              <p className="text-amber-800 leading-relaxed">
+                Thông tin khách hàng, phòng và số khách đã được tự động điền từ đơn cũ. Tiền phòng và tiền cọc yêu cầu 30% được tính lại theo đơn giá hiện tại. Tiền cọc cũ không được tự động sao chép.
+              </p>
+              {datesAdjustedNotice && (
+                <p className="text-amber-700 italic">
+                  * Lưu ý: Ngày lưu trú của đơn cũ ở trong quá khứ nên hệ thống đã tự động điều chỉnh ngày nhận phòng sang ngày hiện tại ({todayStr}).
+                </p>
+              )}
+            </div>
+          )}
+
           {errorMessage && (
             <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />

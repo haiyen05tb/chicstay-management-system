@@ -13,6 +13,7 @@ import { ReportsView } from './components/ReportsView';
 import { DatabaseView } from './components/DatabaseView';
 import { CreateBookingModal } from './components/CreateBookingModal';
 import { InvoicePrintModal } from './components/InvoicePrintModal';
+import { DepositPaymentRequestModal } from './components/DepositPaymentRequestModal';
 import { AuthModal } from './components/AuthModal';
 import { ChatbotDrawer } from './components/ChatbotDrawer';
 import { LoginView } from './components/LoginView';
@@ -35,9 +36,13 @@ const MainLayout: React.FC = () => {
     checkOut?: string;
     guests?: number;
     roomCode?: string;
+    customerId?: string;
+    specialRequest?: string;
+    maDonGoc?: string;
   } | undefined>(undefined);
 
   const [printInvoiceMaDon, setPrintInvoiceMaDon] = useState<string | null>(null);
+  const [printDepositRequestMaDon, setPrintDepositRequestMaDon] = useState<string | null>(null);
 
   // Filter pass-through for Bookings tab
   const [bookingsInitialFilter, setBookingsInitialFilter] = useState<string>('ALL');
@@ -59,6 +64,9 @@ const MainLayout: React.FC = () => {
     checkOut?: string;
     guests?: number;
     roomCode?: string;
+    customerId?: string;
+    specialRequest?: string;
+    maDonGoc?: string;
   }) => {
     setCreateBookingInitialData(initialData);
     setIsCreateBookingModalOpen(true);
@@ -116,6 +124,7 @@ const MainLayout: React.FC = () => {
                   onOpenCreateBookingModal={(init) => handleOpenCreateBookingModal(init)}
                   onOpenBookingDetail={handleOpenBookingDetail}
                   onPrintInvoice={(maDon) => setPrintInvoiceMaDon(maDon)}
+                  onPrintDepositRequest={(maDon) => setPrintDepositRequestMaDon(maDon)}
                 />
               )}
 
@@ -223,6 +232,9 @@ const MainLayout: React.FC = () => {
           initialCheckOut={createBookingInitialData?.checkOut}
           initialGuests={createBookingInitialData?.guests}
           initialRoomCode={createBookingInitialData?.roomCode}
+          initialCustomerId={createBookingInitialData?.customerId}
+          initialSpecialRequest={createBookingInitialData?.specialRequest}
+          initialMaDonGoc={createBookingInitialData?.maDonGoc}
           onClose={() => setIsCreateBookingModalOpen(false)}
           onSuccess={() => {
             setCurrentTab('bookings');
@@ -234,6 +246,13 @@ const MainLayout: React.FC = () => {
         <InvoicePrintModal
           maDon={printInvoiceMaDon}
           onClose={() => setPrintInvoiceMaDon(null)}
+        />
+      )}
+
+      {printDepositRequestMaDon && (
+        <DepositPaymentRequestModal
+          maDon={printDepositRequestMaDon}
+          onClose={() => setPrintDepositRequestMaDon(null)}
         />
       )}
 

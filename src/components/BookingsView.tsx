@@ -62,9 +62,13 @@ interface BookingsViewProps {
     checkOut?: string;
     guests?: number;
     roomCode?: string;
+    customerId?: string;
+    specialRequest?: string;
+    maDonGoc?: string;
   }) => void;
   onOpenBookingDetail: (maDon: string) => void;
   onPrintInvoice: (maDon: string) => void;
+  onPrintDepositRequest?: (maDon: string) => void;
 }
 
 export const BookingsView: React.FC<BookingsViewProps> = ({
@@ -74,6 +78,7 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
   onOpenCreateBookingModal,
   onOpenBookingDetail,
   onPrintInvoice,
+  onPrintDepositRequest,
 }) => {
   const {
     bookings,
@@ -141,6 +146,19 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
   const hasServiceChangedRef = useRef(false);
 
   const handleOpenUpdateModal = (b: DonDatPhong) => {
+    if (b.TrangThaiDon === 'Đã hủy') {
+      const msg = 'Đơn đặt phòng đã bị hủy, không được phép cập nhật hoặc khôi phục trực tiếp.';
+      showToast(msg, 'error');
+      showAlert('error', msg);
+      return;
+    }
+    if (b.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(b.ThoiGianTaoDon)) {
+      const msg = 'Đơn đặt phòng đã quá hạn xác nhận tiền cọc 12 giờ và đã bị tự động hủy, không thể cập nhật.';
+      showToast(msg, 'error');
+      showAlert('error', msg);
+      return;
+    }
+
     setUpdateModalBooking(b);
     setUpdateRoomCode(b.MaPhong);
     setUpdateCheckIn(b.NgayNhanPhong.slice(0, 10));
@@ -158,6 +176,29 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
       .filter((it) => it.MaDon === b.MaDon)
       .map((it) => ({ id: it.id, soLuong: it.SoLuong, maDV: it.MaDV }));
     hasServiceChangedRef.current = false;
+  };
+
+  const handleCreateNewBookingFromCancelled = (oldBooking: DonDatPhong) => {
+    const todayStr = getTodayStr();
+    let checkIn = oldBooking.NgayNhanPhong.slice(0, 10);
+    let checkOut = oldBooking.NgayTraPhong.slice(0, 10);
+    if (checkIn < todayStr) {
+      checkIn = todayStr;
+      const d = new Date();
+      d.setDate(d.getDate() + Math.max(1, oldBooking.SoDem));
+      checkOut = d.toISOString().split('T')[0];
+    }
+
+    setActiveBookingForDetail(null);
+    onOpenCreateBookingModal({
+      checkIn,
+      checkOut,
+      guests: oldBooking.SoKhach,
+      roomCode: oldBooking.MaPhong,
+      customerId: oldBooking.MaKH,
+      specialRequest: oldBooking.YeuCauDacBiet,
+      maDonGoc: oldBooking.MaDon,
+    });
   };
 
   const [depositModalBooking, setDepositModalBooking] = useState<DonDatPhong | null>(null);
@@ -236,6 +277,20 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
 
   // Open Deposit Modal with proper defaults
   const handleOpenDepositModal = (booking: DonDatPhong) => {
+    if (booking.TrangThaiDon === 'Đã hủy') {
+      const msg = 'Đơn đặt phòng đã bị hủy, không thể thực hiện thu cọc.';
+      showToast(msg, 'error');
+      showAlert('error', msg);
+      return;
+    }
+
+    if (booking.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(booking.ThoiGianTaoDon)) {
+      const msg = 'Không thể thu cọc vì đơn đặt phòng đã quá hạn xác nhận tiền cọc 12 giờ và đã bị tự động hủy. Vui lòng kiểm tra và xử lý đơn đặt phòng.';
+      showToast(msg, 'error');
+      showAlert('error', msg);
+      return;
+    }
+
     const today = getTodayStr();
     const checkInDate = booking.NgayNhanPhong.slice(0, 10);
     if (checkInDate < today) {
@@ -255,6 +310,22 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
 
   const handleConfirmDeposit = () => {
     if (!depositModalBooking || isSubmittingDeposit) return;
+
+    if (depositModalBooking.TrangThaiDon === 'Đã hủy') {
+      const msg = 'Đơn đặt phòng đã bị hủy, không thể thực hiện thu cọc.';
+      setDepositError(msg);
+      showToast(msg, 'error');
+      showAlert('error', msg);
+      return;
+    }
+
+    if (depositModalBooking.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(depositModalBooking.ThoiGianTaoDon)) {
+      const msg = 'Không thể thu cọc vì đơn đặt phòng đã quá hạn xác nhận tiền cọc 12 giờ và đã bị tự động hủy. Vui lòng kiểm tra và xử lý đơn đặt phòng.';
+      setDepositError(msg);
+      showToast(msg, 'error');
+      showAlert('error', msg);
+      return;
+    }
 
     const today = getTodayStr();
     const checkInDate = depositModalBooking.NgayNhanPhong.slice(0, 10);
@@ -1025,13 +1096,24 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
                               )}
 
                               {b.TrangThaiDon === 'Chờ đặt cọc' && (
-                                <button
-                                  onClick={() => handleOpenDepositModal(b)}
-                                  className="px-2.5 py-1 rounded-md bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
-                                  title="Ghi nhận đặt cọc 30%"
-                                >
-                                  <CreditCard className="w-3 h-3" /> Thu cọc
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() => handleOpenDepositModal(b)}
+                                    className="px-2.5 py-1 rounded-md bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
+                                    title="Ghi nhận đặt cọc 30%"
+                                  >
+                                    <CreditCard className="w-3 h-3" /> Thu cọc
+                                  </button>
+                                  {onPrintDepositRequest && (
+                                    <button
+                                      onClick={() => onPrintDepositRequest(b.MaDon)}
+                                      className="px-2 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] border border-blue-200 shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
+                                      title="In phiếu yêu cầu thanh toán cọc VietQR"
+                                    >
+                                      <QrCode className="w-3 h-3 text-blue-600" /> In phiếu cọc
+                                    </button>
+                                  )}
+                                </>
                               )}
 
                               {b.TrangThaiDon === 'Đã xác nhận' && (
@@ -1124,6 +1206,73 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 overscroll-contain">
+              {activeBookingForDetail.TrangThaiDon === 'Đã hủy' && (
+                <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-black text-rose-900 text-sm">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>ĐƠN ĐẶT PHÒNG ĐÃ BỊ HỦY</span>
+                    </div>
+                    {activeBookingForDetail.ThoiGianHuy && (
+                      <span className="text-[11px] font-semibold text-rose-700 bg-rose-100/80 px-2.5 py-0.5 rounded-full">
+                        Thời gian hủy: {formatDateTime(activeBookingForDetail.ThoiGianHuy)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-rose-900">
+                    <span className="font-bold">Lý do hủy:</span>{' '}
+                    <span className="font-medium text-rose-800">
+                      {activeBookingForDetail.LyDoHuy || 'Quá hạn xác nhận tiền cọc 12 giờ'}
+                    </span>
+                  </div>
+
+                  {activeBookingForDetail.MaDonTaiTao && (
+                    <div className="p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 font-semibold flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-blue-600 shrink-0" />
+                        <span>Đã tạo đơn mới thay thế: <strong className="text-blue-800">{activeBookingForDetail.MaDonTaiTao}</strong></span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = bookings.find((b) => b.MaDon === activeBookingForDetail.MaDonTaiTao);
+                          if (target) setActiveBookingForDetail(target);
+                        }}
+                        className="text-xs text-blue-700 underline font-bold hover:text-blue-900 cursor-pointer"
+                      >
+                        Xem đơn mới
+                      </button>
+                    </div>
+                  )}
+
+                  {activeBookingForDetail.MaDonGoc && (
+                    <div className="p-2.5 rounded-lg bg-purple-50 border border-purple-200 text-purple-900 font-semibold flex items-center justify-between">
+                      <span>Đơn này được kế thừa từ đơn gốc: <strong className="text-purple-800">{activeBookingForDetail.MaDonGoc}</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = bookings.find((b) => b.MaDon === activeBookingForDetail.MaDonGoc);
+                          if (target) setActiveBookingForDetail(target);
+                        }}
+                        className="text-xs text-purple-700 underline font-bold hover:text-purple-900 cursor-pointer"
+                      >
+                        Xem đơn gốc
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-amber-900 text-[11px] space-y-1">
+                    <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>Lưu ý đối soát thanh toán thủ công</span>
+                    </div>
+                    <p className="leading-relaxed">
+                      Nếu khách hàng đã chuyển khoản trước khi đơn bị hủy nhưng Quản lý chưa kịp xác nhận, Quản lý vui lòng đối soát sao kê ngân hàng và thống nhất với khách việc hoàn tiền hoặc đối trừ cho đơn mới. Tuyệt đối không ghi nhận trùng lặp giao dịch thanh toán.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl text-xs">
                 <div>
                   <span className="font-bold text-slate-500 uppercase text-[10px] block">Khách hàng lưu trú</span>
@@ -1346,12 +1495,23 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
 
               <div className="flex items-center gap-2">
                 {activeBookingForDetail.TrangThaiDon === 'Chờ đặt cọc' && (
-                  <button
-                    onClick={() => handleOpenDepositModal(activeBookingForDetail)}
-                    className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                  >
-                    <CreditCard className="w-4 h-4" /> Thu tiền cọc (30%)
-                  </button>
+                  <>
+                    <button
+                      onClick={() => handleOpenDepositModal(activeBookingForDetail)}
+                      className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                    >
+                      <CreditCard className="w-4 h-4" /> Thu tiền cọc (30%)
+                    </button>
+                    {onPrintDepositRequest && (
+                      <button
+                        onClick={() => onPrintDepositRequest(activeBookingForDetail.MaDon)}
+                        className="px-4 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                        title="In phiếu yêu cầu thanh toán cọc VietQR chuẩn A4 / PDF"
+                      >
+                        <QrCode className="w-4 h-4 text-blue-600" /> In phiếu yêu cầu cọc (VietQR)
+                      </button>
+                    )}
+                  </>
                 )}
 
                 {activeBookingForDetail.TrangThaiDon === 'Đã xác nhận' && (
@@ -1369,6 +1529,17 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
                     className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
                   >
                     <CheckOutIcon className="w-4 h-4" /> Check-out & Tất toán
+                  </button>
+                )}
+
+                {activeBookingForDetail.TrangThaiDon === 'Đã hủy' && (
+                  <button
+                    type="button"
+                    onClick={() => handleCreateNewBookingFromCancelled(activeBookingForDetail)}
+                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+                    title="Tạo đơn mới kế thừa khách hàng, phòng và ngày lưu trú từ đơn đã hủy"
+                  >
+                    <RotateCcw className="w-4 h-4" /> Tạo đơn mới từ đơn này
                   </button>
                 )}
 
@@ -1489,7 +1660,7 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
                           bankConfig.accountNo,
                           bankConfig.accountName,
                           Number(depositAmount),
-                          `${depositModalBooking.MaDon} COC`
+                          depositModalBooking.MaDon
                         )}
                         alt="VietQR Code"
                         className="w-44 h-44 object-contain rounded-lg border border-white shadow-xs bg-white p-1"
@@ -1499,6 +1670,18 @@ export const BookingsView: React.FC<BookingsViewProps> = ({
                       <strong>{bankConfig.bankName}</strong> <br />
                       Số TK: <strong className="text-blue-700 font-mono">{bankConfig.accountNo}</strong> · Chủ TK: <strong>{bankConfig.accountName}</strong>
                     </div>
+                    {onPrintDepositRequest && (
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() => onPrintDepositRequest(depositModalBooking.MaDon)}
+                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                          title="In phiếu yêu cầu thanh toán cọc VietQR chuẩn A4 / PDF"
+                        >
+                          <Printer className="w-3.5 h-3.5" /> In phiếu yêu cầu thanh toán cọc
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 

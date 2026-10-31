@@ -101,6 +101,10 @@ export interface DonDatPhong {
   ThoiGianCheckInThucTe?: string;
   ThoiGianCheckOutThucTe?: string;
   YeuCauDacBiet?: string;
+  LyDoHuy?: string;
+  ThoiGianHuy?: string;
+  MaDonGoc?: string; // Mã đơn gốc nếu đơn này được tạo lại từ đơn cũ đã hủy
+  MaDonTaiTao?: string; // Mã đơn mới tạo từ đơn đã hủy này
   lichSuThayDoi?: LichSuThayDoiDon[];
   // Computed / expanded helper fields
   tenKhachHang?: string;

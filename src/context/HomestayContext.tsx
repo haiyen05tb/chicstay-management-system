@@ -28,6 +28,8 @@ import {
   calculateDeposit,
   getTodayStr,
   isEligibleForRefund48Hours,
+  isBookingOverdue12Hours,
+  getNowVietnamISO,
   generateMaDon,
   generateMaPhieu,
   generateMaHoaDon,
@@ -75,7 +77,21 @@ interface HomestayContextType {
     ngayTraPhong: string;
     soKhach: number;
     yeuCauDacBiet?: string;
+    maDonGoc?: string;
   }) => { success: boolean; message: string; maDon?: string };
+
+  createNewBookingFromCancelled: (
+    oldMaDon: string,
+    overrides?: {
+      ngayNhanPhong?: string;
+      ngayTraPhong?: string;
+      maPhong?: string;
+      soKhach?: number;
+      yeuCauDacBiet?: string;
+    }
+  ) => { success: boolean; message: string; maDonMoi?: string };
+
+  checkAndAutoCancelOverdue: () => { cancelledCount: number; cancelledIds: string[] };
 
   confirmDeposit: (
     maDon: string,
@@ -335,6 +351,70 @@ export const HomestayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     localStorage.setItem(`${STORAGE_PREFIX}bank_config`, JSON.stringify(bankConfig));
   }, [bankConfig]);
 
+  // Tự động kiểm tra và hủy các đơn "Chờ đặt cọc" quá hạn 12 giờ (ThoiGianTaoDon + 12h)
+  const checkAndAutoCancelOverdue = (): { cancelledCount: number; cancelledIds: string[] } => {
+    let cancelledCount = 0;
+    const cancelledIds: string[] = [];
+    const cancelTime = getNowVietnamISO();
+
+    setBookings((prevBookings) => {
+      const overdue = prevBookings.filter(
+        (b) => b.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(b.ThoiGianTaoDon)
+      );
+      if (overdue.length === 0) return prevBookings;
+
+      overdue.forEach((b) => cancelledIds.push(b.MaDon));
+      cancelledCount = overdue.length;
+
+      const updated = prevBookings.map((b) => {
+        if (b.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(b.ThoiGianTaoDon)) {
+          const historyRecord: LichSuThayDoiDon = {
+            id: `LS_AUTOCANCEL_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            thoiGian: cancelTime,
+            nguoiThucHien: 'Hệ thống (Tự động)',
+            noiDungThayDoi: 'Tự động hủy đơn do quá hạn xác nhận tiền cọc 12 giờ (ThoiGianTaoDon + 12 giờ)',
+          };
+          return {
+            ...b,
+            TrangThaiDon: 'Đã hủy' as const,
+            LyDoHuy: 'Quá hạn xác nhận tiền cọc 12 giờ',
+            ThoiGianHuy: cancelTime,
+            lichSuThayDoi: [historyRecord, ...(b.lichSuThayDoi || [])],
+          };
+        }
+        return b;
+      });
+
+      // Giải phóng trạng thái phòng nếu không còn đơn nào khác đang giữ phòng này
+      setRooms((prevRooms) =>
+        prevRooms.map((room) => {
+          const stillHeld = updated.some(
+            (b) =>
+              b.MaPhong === room.MaPhong &&
+              (b.TrangThaiDon === 'Chờ đặt cọc' || b.TrangThaiDon === 'Đã xác nhận' || b.TrangThaiDon === 'Đã check-in')
+          );
+          if (!stillHeld && room.TrangThaiPhong === 'Tạm giữ') {
+            return { ...room, TrangThaiPhong: 'Sẵn sàng' };
+          }
+          return room;
+        })
+      );
+
+      return updated;
+    });
+
+    return { cancelledCount, cancelledIds };
+  };
+
+  // Quét tự động định kỳ 30 giây & khi khởi động ứng dụng
+  useEffect(() => {
+    checkAndAutoCancelOverdue();
+    const timer = setInterval(() => {
+      checkAndAutoCancelOverdue();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Auth methods
   const login = (email: string, pass: string): boolean => {
     const user = users.find((u) => u.Email.toLowerCase() === email.trim().toLowerCase() && u.MatKhau === pass);
@@ -432,6 +512,7 @@ export const HomestayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     ngayTraPhong: string;
     soKhach: number;
     yeuCauDacBiet?: string;
+    maDonGoc?: string;
   }): { success: boolean; message: string; maDon?: string } => {
     // 1. Kiểm tra và chuẩn hóa thông tin khách hàng mới
     if (data.newCustomer) {
@@ -526,6 +607,7 @@ export const HomestayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const conLai = tongTien;
 
     const maDon = generateMaDon(bookings.map((b) => b.MaDon));
+    const nowIso = getNowVietnamISO();
     const newBooking: DonDatPhong = {
       MaDon: maDon,
       MaND: currentUser?.MaND || 'ND001',
@@ -543,20 +625,133 @@ export const HomestayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       ConLai: conLai,
       TrangThaiDon: 'Chờ đặt cọc',
       TrangThaiThanhToan: 'Chưa thanh toán',
-      ThoiGianTaoDon: new Date().toISOString(),
+      ThoiGianTaoDon: nowIso,
       YeuCauDacBiet: data.yeuCauDacBiet,
+      MaDonGoc: data.maDonGoc,
+      lichSuThayDoi: data.maDonGoc
+        ? [
+            {
+              id: `LS_RECREATE_${Date.now()}`,
+              thoiGian: nowIso,
+              nguoiThucHien: currentUser ? `${currentUser.HoTen} (${currentUser.VaiTro})` : 'Quản lý Homestay',
+              noiDungThayDoi: `Đơn được tạo mới kế thừa từ đơn đã hủy ${data.maDonGoc}. Đã tính lại tiền phòng (${formatVND(tienPhong)}) và cọc 30% (${formatVND(tienCocYeuCau)}). Tiền cọc cũ không được sao chép.`,
+            },
+          ]
+        : undefined,
     };
 
     setRooms((prev) =>
       prev.map((r) => (r.MaPhong === data.maPhong ? { ...r, TrangThaiPhong: 'Tạm giữ' } : r))
     );
 
-    setBookings((prev) => [newBooking, ...prev]);
+    if (data.maDonGoc) {
+      setBookings((prev) => [
+        newBooking,
+        ...prev.map((b) =>
+          b.MaDon === data.maDonGoc
+            ? {
+                ...b,
+                MaDonTaiTao: maDon,
+                lichSuThayDoi: [
+                  {
+                    id: `LS_LINK_${Date.now()}`,
+                    thoiGian: nowIso,
+                    nguoiThucHien: currentUser ? `${currentUser.HoTen} (${currentUser.VaiTro})` : 'Quản lý Homestay',
+                    noiDungThayDoi: `Đã tạo đơn mới thay thế: ${maDon}`,
+                  },
+                  ...(b.lichSuThayDoi || []),
+                ],
+              }
+            : b
+        ),
+      ]);
+    } else {
+      setBookings((prev) => [newBooking, ...prev]);
+    }
 
     return {
       success: true,
       message: `Tạo đơn đặt phòng ${maDon} thành công! Số tiền cọc cần thu: ${tienCocYeuCau.toLocaleString('vi-VN')} ₫ (30%).`,
       maDon: maDon,
+    };
+  };
+
+  // Tạo đơn mới từ đơn đã hủy (kế thừa thông tin, tính lại tiền cọc và tiền phòng)
+  const createNewBookingFromCancelled = (
+    oldMaDon: string,
+    overrides?: {
+      ngayNhanPhong?: string;
+      ngayTraPhong?: string;
+      maPhong?: string;
+      soKhach?: number;
+      yeuCauDacBiet?: string;
+    }
+  ): { success: boolean; message: string; maDonMoi?: string } => {
+    const oldBooking = bookings.find((b) => b.MaDon === oldMaDon);
+    if (!oldBooking) return { success: false, message: `Không tìm thấy đơn cũ ${oldMaDon}.` };
+    if (oldBooking.TrangThaiDon !== 'Đã hủy') {
+      return {
+        success: false,
+        message: `Chỉ hỗ trợ tạo đơn mới từ đơn ở trạng thái "Đã hủy". Đơn ${oldMaDon} hiện là "${oldBooking.TrangThaiDon}".`,
+      };
+    }
+
+    const todayStr = getTodayStr();
+    const checkIn = overrides?.ngayNhanPhong || oldBooking.NgayNhanPhong;
+    const checkOut = overrides?.ngayTraPhong || oldBooking.NgayTraPhong;
+
+    const checkInDateOnly = checkIn.slice(0, 10);
+    const checkOutDateOnly = checkOut.slice(0, 10);
+
+    if (checkInDateOnly < todayStr) {
+      return {
+        success: false,
+        message: `Ngày nhận phòng (${checkInDateOnly}) đã qua so với ngày hiện tại (${todayStr}). Vui lòng chọn ngày nhận phòng từ hôm nay trở đi.`,
+      };
+    }
+    if (checkOutDateOnly <= checkInDateOnly) {
+      return {
+        success: false,
+        message: 'Ngày trả phòng phải sau ngày nhận phòng ít nhất 1 đêm.',
+      };
+    }
+
+    const targetRoomId = overrides?.maPhong || oldBooking.MaPhong;
+    const room = rooms.find((r) => r.MaPhong === targetRoomId);
+    if (!room) {
+      return { success: false, message: `Phòng ${targetRoomId} không tồn tại trên hệ thống.` };
+    }
+
+    const isAvail = checkRoomAvailability(targetRoomId, checkIn, checkOut);
+    if (!isAvail) {
+      return {
+        success: false,
+        message: `Phòng ${room.TenPhong} (${targetRoomId}) đã có khách đặt trong khoảng thời gian ${checkInDateOnly} → ${checkOutDateOnly}. Vui lòng chọn phòng khác hoặc đổi ngày lưu trú.`,
+      };
+    }
+
+    const guests = overrides?.soKhach ?? oldBooking.SoKhach;
+    if (guests > room.SucChua) {
+      return {
+        success: false,
+        message: `Số khách (${guests}) vượt quá sức chứa tối đa của phòng ${room.TenPhong} (${room.SucChua} người).`,
+      };
+    }
+
+    const res = createBooking({
+      maPhong: targetRoomId,
+      maKH: oldBooking.MaKH,
+      ngayNhanPhong: checkIn,
+      ngayTraPhong: checkOut,
+      soKhach: guests,
+      yeuCauDacBiet: overrides?.yeuCauDacBiet ?? oldBooking.YeuCauDacBiet,
+      maDonGoc: oldBooking.MaDon,
+    });
+
+    return {
+      success: res.success,
+      message: res.message,
+      maDonMoi: res.maDon,
     };
   };
 
@@ -570,6 +765,21 @@ export const HomestayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   ): { success: boolean; message: string; receipt?: PhieuThanhToan } => {
     const booking = bookings.find((b) => b.MaDon === maDon);
     if (!booking) return { success: false, message: 'Không tìm thấy đơn đặt phòng.' };
+
+    if (booking.TrangThaiDon === 'Đã hủy') {
+      return {
+        success: false,
+        message: 'Đơn đặt phòng đã bị hủy, không thể thực hiện thu cọc.',
+      };
+    }
+
+    if (booking.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(booking.ThoiGianTaoDon)) {
+      checkAndAutoCancelOverdue();
+      return {
+        success: false,
+        message: 'Không thể thu cọc vì đơn đặt phòng đã quá hạn xác nhận tiền cọc 12 giờ và đã bị tự động hủy. Vui lòng kiểm tra và xử lý đơn đặt phòng.',
+      };
+    }
 
     if (booking.TrangThaiDon !== 'Chờ đặt cọc') {
       return { success: false, message: `Đơn đặt phòng đang ở trạng thái "${booking.TrangThaiDon}", không thể thu cọc.` };
@@ -663,6 +873,21 @@ export const HomestayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   ): { success: boolean; message: string } => {
     const booking = bookings.find((b) => b.MaDon === maDon);
     if (!booking) return { success: false, message: 'Không tìm thấy đơn đặt phòng.' };
+
+    if (booking.TrangThaiDon === 'Đã hủy') {
+      return {
+        success: false,
+        message: 'Đơn đặt phòng đã bị hủy, không được phép cập nhật hoặc khôi phục trực tiếp.',
+      };
+    }
+
+    if (booking.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(booking.ThoiGianTaoDon)) {
+      checkAndAutoCancelOverdue();
+      return {
+        success: false,
+        message: 'Đơn đặt phòng đã quá hạn xác nhận tiền cọc 12 giờ và đã bị tự động hủy, không thể cập nhật.',
+      };
+    }
 
     if (
       booking.TrangThaiDon !== 'Chờ đặt cọc' &&
@@ -1882,6 +2107,8 @@ export const HomestayProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         bankConfig,
         updateBankConfig,
         createBooking,
+        createNewBookingFromCancelled,
+        checkAndAutoCancelOverdue,
         confirmDeposit,
         updateBooking,
         cancelBooking,

@@ -21,12 +21,13 @@ export const formatDate = (dateString?: string): string => {
   }
 };
 
-export const formatDateTime = (dateString?: string): string => {
-  if (!dateString) return '-';
+export const formatDateTime = (dateInput?: string | Date): string => {
+  if (!dateInput) return '-';
   try {
-    const d = new Date(dateString);
-    if (isNaN(d.getTime())) return dateString;
+    const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+    if (isNaN(d.getTime())) return String(dateInput);
     return d.toLocaleString('vi-VN', {
+      timeZone: VIETNAM_TIMEZONE,
       hour: '2-digit',
       minute: '2-digit',
       day: '2-digit',
@@ -34,16 +35,56 @@ export const formatDateTime = (dateString?: string): string => {
       year: 'numeric',
     });
   } catch {
-    return dateString;
+    return String(dateInput);
   }
 };
 
+export const VIETNAM_TIMEZONE = 'Asia/Ho_Chi_Minh';
+
 export const getTodayStr = (): string => {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: VIETNAM_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(new Date());
+};
+
+/**
+ * Chuyển đổi chuỗi thời gian thành mili-giây Epoch theo múi giờ Asia/Ho_Chi_Minh (UTC+7)
+ * nếu chuỗi không chứa chỉ định múi giờ rõ ràng (Z hoặc +/-HH:mm).
+ */
+export const parseVietnamDateTime = (dateStr: string): number => {
+  if (!dateStr) return 0;
+  const trimmed = dateStr.trim();
+  if (trimmed.endsWith('Z') || /[+-]\d{2}(:\d{2})?$/.test(trimmed)) {
+    return new Date(trimmed).getTime();
+  }
+  // Mặc định múi giờ Việt Nam +07:00
+  return new Date(`${trimmed}+07:00`).getTime();
+};
+
+/**
+ * Trả về chuỗi ISO theo giờ chuẩn thực tế tại Việt Nam (Asia/Ho_Chi_Minh)
+ */
+export const getNowVietnamISO = (date: Date = new Date()): string => {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: VIETNAM_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const p: Record<string, string> = {};
+  for (const part of parts) {
+    p[part.type] = part.value;
+  }
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}+07:00`;
 };
 
 export const calculateNights = (checkIn: string, checkOut: string): number => {
@@ -61,12 +102,26 @@ export const calculateDeposit = (roomPrice: number, rate = 0.3): number => {
   return Math.round(raw / 1000) * 1000;
 };
 
-// Kiểm tra quá hạn đặt cọc 12 giờ
+// Kiểm tra quá hạn đặt cọc 12 giờ theo giờ thực tế chuẩn Asia/Ho_Chi_Minh
 export const isBookingOverdue12Hours = (createdAt: string): boolean => {
-  const created = new Date(createdAt).getTime();
-  const now = new Date().getTime();
-  const diffHours = (now - created) / (1000 * 60 * 60);
+  if (!createdAt) return false;
+  const createdMs = parseVietnamDateTime(createdAt);
+  const nowMs = Date.now();
+  const diffHours = (nowMs - createdMs) / (1000 * 60 * 60);
   return diffHours >= 12;
+};
+
+// Tính thời điểm hết hạn đặt cọc (ThoiGianTaoDon + 12 giờ)
+export const getDepositDeadline = (createdAt: string): Date => {
+  const createdMs = parseVietnamDateTime(createdAt);
+  return new Date(createdMs + 12 * 60 * 60 * 1000);
+};
+
+// Số phút còn lại cho đến hạn đặt cọc 12 giờ
+export const getDepositRemainingMinutes = (createdAt: string): number => {
+  if (!createdAt) return 0;
+  const deadlineMs = parseVietnamDateTime(createdAt) + 12 * 60 * 60 * 1000;
+  return Math.round((deadlineMs - Date.now()) / (1000 * 60));
 };
 
 // Kiểm tra hủy >= 48 giờ trước 14:00 ngày check-in

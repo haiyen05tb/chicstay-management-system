@@ -58,6 +58,82 @@ app.get('/api/database/sql', (req: Request, res: Response) => {
   }
 });
 
+// Timezone and auto-cancel helpers for Asia/Ho_Chi_Minh
+function parseVietnamDateTime(dateStr: string): Date {
+  if (!dateStr) return new Date();
+  if (dateStr.includes('+') || dateStr.endsWith('Z')) {
+    return new Date(dateStr);
+  }
+  return new Date(`${dateStr}+07:00`);
+}
+
+function isBookingOverdue12Hours(thoiGianTaoDon: string): boolean {
+  if (!thoiGianTaoDon) return false;
+  const createdAt = parseVietnamDateTime(thoiGianTaoDon).getTime();
+  const now = Date.now();
+  const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+  return now - createdAt > TWELVE_HOURS_MS;
+}
+
+// API: Cron / Webhook for 12-hour deposit auto-cancellation (Vercel cron and standalone background)
+app.all(['/api/cron/auto-cancel', '/api/bookings/auto-cancel-overdue'], (req: Request, res: Response) => {
+  const nowVietnam = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date());
+
+  const clientBookings = req.body?.bookings;
+  if (Array.isArray(clientBookings)) {
+    let cancelledCount = 0;
+    const cancelledIds: string[] = [];
+
+    const updatedBookings = clientBookings.map((b: any) => {
+      if (b.TrangThaiDon === 'Chờ đặt cọc' && isBookingOverdue12Hours(b.ThoiGianTaoDon)) {
+        cancelledCount++;
+        cancelledIds.push(b.MaDon);
+        return {
+          ...b,
+          TrangThaiDon: 'Đã hủy',
+          LyDoHuy: 'Quá hạn xác nhận tiền cọc 12 giờ',
+          ThoiGianHuy: new Date().toISOString(),
+          lichSuThayDoi: [
+            {
+              id: `LS_CRON_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              thoiGian: new Date().toISOString(),
+              nguoiThucHien: 'Hệ thống (Cron Vercel/Server)',
+              noiDungThayDoi: 'Tự động hủy đơn do quá hạn xác nhận tiền cọc 12 giờ (ThoiGianTaoDon + 12h)',
+            },
+            ...(b.lichSuThayDoi || []),
+          ],
+        };
+      }
+      return b;
+    });
+
+    return res.json({
+      success: true,
+      message: `Đã quét và tự động hủy ${cancelledCount} đơn quá hạn cọc 12 giờ.`,
+      nowVietnam,
+      cancelledCount,
+      cancelledIds,
+      bookings: updatedBookings,
+    });
+  }
+
+  return res.json({
+    success: true,
+    message: 'Chicstay Cron auto-cancel service is operational (Asia/Ho_Chi_Minh).',
+    timestamp: nowVietnam,
+    timezone: 'Asia/Ho_Chi_Minh',
+  });
+});
+
 // API: Chatbot Assistant for Chicstay Homestay
 app.post('/api/chatbot', async (req: Request, res: Response) => {
   const { message, context } = req.body;
